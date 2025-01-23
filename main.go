@@ -4,32 +4,30 @@ import (
 	"log"
 	"net/http"
 	"os"
-
-	"github.com/HikLk/go_final_API/db"
-	"github.com/HikLk/go_final_API/handlers"
 )
 
 func main() {
 	// Инициализация базы данных
-	_, err := db.InitializeDatabase()
+	_, err := InitializeDatabase()
 	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		log.Fatalf("Не удалось инициализировать базу данных: %v", err)
 	}
-	defer db.DB.Close()
+	defer DB.Close() // Закрытие соединения с базой данных при завершении работы программы
 
 	// Настройка маршрутов
-	http.HandleFunc("/api/next-date", handlers.NextDateHandler)
-	http.HandleFunc("/api/add-task", handlers.AddTaskHandler)
-	http.HandleFunc("/api/get-tasks", handlers.GetTasksHandler)
-	http.HandleFunc("/api/update-task", handlers.UpdateTaskHandler)
-	http.HandleFunc("/api/delete-task", handlers.DeleteTaskHandler)
+	http.HandleFunc("/api/next-date", NextDateHandler)         // Обработчик для получения следующей даты
+	http.HandleFunc("/api/add-task", AddTaskHandler)           // Обработчик для добавления задачи
+	http.HandleFunc("/api/get-tasks", GetTasksHandler)         // Обработчик для получения списка задач
+	http.HandleFunc("/api/update-task", UpdateTaskHandler)     // Обработчик для обновления задачи
+	http.HandleFunc("/api/get-task-by-id", GetTaskByIDHandler) // Обработчик для удаления задачи
+	http.HandleFunc("/api/delete-task", DeleteTaskHandler)     // Обработчик для удаления задачи
 
-	// Чтение порта из окружения
+	// Чтение порта из переменных окружения
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "8080" // Использовать порт 7540, если переменная окружения PORT не задана
 	}
 
-	log.Printf("Starting server on port %s...", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	log.Printf("Запуск сервера на порту %s...", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil)) // Запуск HTTP-сервера
 }

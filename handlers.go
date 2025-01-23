@@ -1,18 +1,17 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"time"
-
-	"github.com/HikLk/go_final_API/db"
-	"github.com/HikLk/go_final_API/utils"
 )
 
-const DateFormat = "20060102"
+const limit = 50
 
+// Task представляет задачу
 type Task struct {
 	ID      string `json:"id,omitempty"`
 	Date    string `json:"date"`
@@ -21,7 +20,7 @@ type Task struct {
 	Repeat  string `json:"repeat"`
 }
 
-// NextDateHandler calculates the next occurrence of a task based on the repetition rule
+// nextDateHandler обрабатывает запрос для расчета следующей даты задачи
 func NextDateHandler(w http.ResponseWriter, r *http.Request) {
 	nowParam := r.URL.Query().Get("now")
 	repeatParam := r.URL.Query().Get("repeat")
@@ -33,18 +32,18 @@ func NextDateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nextDate, err := utils.NextDate(now, dateParam, repeatParam)
+	nextDate, err := NextDate(now, dateParam, repeatParam)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	w.Header().Set("Content-Type", "text/plain; charset=UTF-8")
 	if _, err := w.Write([]byte(nextDate)); err != nil {
 		log.Printf("Response writing error: %v", err)
 	}
 }
 
-// AddTaskHandler handles the addition of new tasks
 func AddTaskHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -52,8 +51,7 @@ func AddTaskHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var task Task
-	err := json.NewDecoder(r.Body).Decode(&task)
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
 		http.Error(w, "JSON Deserialization Error", http.StatusBadRequest)
 		return
 	}
@@ -75,20 +73,27 @@ func AddTaskHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if parsedDate.Before(now) {
-			if task.Repeat == "" {
-				task.Date = today
-			} else {
-				nextDate, err := utils.NextDate(now, task.Date, task.Repeat)
+			if task.Repeat != "" {
+				nextDate, err := NextDate(now, task.Date, task.Repeat)
 				if err != nil {
 					sendErrorResponse(w, "Error in repetition rule")
 					return
 				}
 				task.Date = nextDate
+			} else {
+				task.Date = today
 			}
 		}
 	}
 
-	res, err := db.DB.Exec("INSERT INTO scheduler (date, title, comment, repeat) VALUES (?, ?, ?, ?)", task.Date, task.Title, task.Comment, task.Repeat)
+	if task.Repeat != "" {
+		if _, err := NextDate(now, task.Date, task.Repeat); err != nil {
+			sendErrorResponse(w, "Invalid repetition rule")
+			return
+		}
+	}
+
+	res, err := DB.Exec("INSERT INTO scheduler (date, title, comment, repeat) VALUES (?, ?, ?, ?)", task.Date, task.Title, task.Comment, task.Repeat)
 	if err != nil {
 		sendErrorResponse(w, "Error adding task to the database")
 		return
@@ -105,10 +110,10 @@ func AddTaskHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// GetTasksHandler retrieves all tasks
 func GetTasksHandler(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.DB.Query("SELECT id, date, title, comment, repeat FROM scheduler ORDER BY date ASC")
+	rows, err := DB.Query(fmt.Sprintf("SELECT id, date, title, comment, repeat FROM scheduler ORDER BY date ASC LIMIT %d", limit))
 	if err != nil {
+		log.Printf("Database query error: %v", err)
 		sendErrorResponse(w, "Error retrieving tasks from database")
 		return
 	}
@@ -117,20 +122,53 @@ func GetTasksHandler(w http.ResponseWriter, r *http.Request) {
 	tasks := []Task{}
 	for rows.Next() {
 		var task Task
-		err := rows.Scan(&task.ID, &task.Date, &task.Title, &task.Comment, &task.Repeat)
-		if err != nil {
+		if err := rows.Scan(&task.ID, &task.Date, &task.Title, &task.Comment, &task.Repeat); err != nil {
+			log.Printf("Error scanning row: %v", err)
 			sendErrorResponse(w, "Error reading tasks from database")
 			return
 		}
 		tasks = append(tasks, task)
 	}
 
+	if err := rows.Err(); err != nil {
+		log.Printf("Row iteration error: %v", err)
+		sendErrorResponse(w, "Error iterating tasks")
+		return
+	}
+
 	response := map[string]interface{}{"tasks": tasks}
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("JSON encoding error: %v", err)
+		sendErrorResponse(w, "Error encoding tasks to JSON")
+	}
 }
 
-// UpdateTaskHandler updates an existing task
+func GetTaskByIDHandler(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		sendErrorResponse(w, "Task ID is not specified")
+		return
+	}
+
+	var task Task
+	if err := DB.QueryRow("SELECT id, date, title, comment, repeat FROM scheduler WHERE id = ?", id).Scan(&task.ID, &task.Date, &task.Title, &task.Comment, &task.Repeat); err != nil {
+		if err == sql.ErrNoRows {
+			sendErrorResponse(w, "Task not found")
+		} else {
+			log.Printf("Database error: %v", err)
+			sendErrorResponse(w, "Error retrieving task")
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	if err := json.NewEncoder(w).Encode(task); err != nil {
+		log.Printf("JSON encoding error: %v", err)
+		sendErrorResponse(w, "Error encoding task to JSON")
+	}
+}
+
 func UpdateTaskHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPut {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -138,8 +176,7 @@ func UpdateTaskHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var task Task
-	err := json.NewDecoder(r.Body).Decode(&task)
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
 		http.Error(w, "JSON Deserialization Error", http.StatusBadRequest)
 		return
 	}
@@ -163,7 +200,7 @@ func UpdateTaskHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if parsedDate.Before(now) && task.Repeat != "" {
-			nextDate, err := utils.NextDate(now, task.Date, task.Repeat)
+			nextDate, err := NextDate(now, task.Date, task.Repeat)
 			if err != nil {
 				sendErrorResponse(w, "Error in repetition rule")
 				return
@@ -172,47 +209,59 @@ func UpdateTaskHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	res, err := db.DB.Exec("UPDATE scheduler SET date = ?, title = ?, comment = ?, repeat = ? WHERE id = ?", task.Date, task.Title, task.Comment, task.Repeat, task.ID)
+	res, err := DB.Exec("UPDATE scheduler SET date = ?, title = ?, comment = ?, repeat = ? WHERE id = ?", task.Date, task.Title, task.Comment, task.Repeat, task.ID)
 	if err != nil {
+		log.Printf("Database error: %v", err)
 		sendErrorResponse(w, "Error updating task")
 		return
 	}
 
 	affected, err := res.RowsAffected()
 	if err != nil || affected == 0 {
-		sendErrorResponse(w, "Task not found")
+		sendErrorResponse(w, "Задача не найдена")
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// DeleteTaskHandler deletes a task
+// sendErrorResponse отправляет JSON-ответ с ошибкой
+func sendErrorResponse(w http.ResponseWriter, errorMessage string) {
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	w.WriteHeader(http.StatusBadRequest)
+	json.NewEncoder(w).Encode(map[string]string{"error": errorMessage})
+}
 func DeleteTaskHandler(w http.ResponseWriter, r *http.Request) {
+	// Получение идентификатора задачи
 	id := r.URL.Query().Get("id")
 	if id == "" {
 		sendErrorResponse(w, "Task ID is not specified")
 		return
 	}
 
-	res, err := db.DB.Exec("DELETE FROM scheduler WHERE id = ?", id)
+	// Выполнение запроса на удаление и получение количества затронутых строк
+	res, err := DB.Exec("DELETE FROM scheduler WHERE id = ?", id)
 	if err != nil {
+		log.Printf("Error deleting task: %v", err)
 		sendErrorResponse(w, "Error deleting task")
 		return
 	}
 
-	affected, err := res.RowsAffected()
-	if err != nil || affected == 0 {
+	// Проверяем, была ли удалена хотя бы одна строка
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		log.Printf("Error retrieving affected rows: %v", err)
+		sendErrorResponse(w, "Error retrieving affected rows")
+		return
+	}
+
+	if rowsAffected == 0 {
+		// Если строк с таким id не найдено, возвращаем ошибку
 		sendErrorResponse(w, "Task not found")
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// sendErrorResponse sends a JSON error response
-func sendErrorResponse(w http.ResponseWriter, errorMessage string) {
+	// Возвращаем пустой JSON-ответ в случае успешного удаления
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusBadRequest)
-	json.NewEncoder(w).Encode(map[string]string{"error": errorMessage})
+	w.Write([]byte("{}"))
 }
