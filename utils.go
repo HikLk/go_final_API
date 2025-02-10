@@ -3,39 +3,52 @@ package main
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
-// NextDate вычисляет следующую дату для задачи в зависимости от типа повторения
+// Определение формата даты, используемого в программе
+const DateFormat = "20060102"
+
+// NextDate вычисляет следующую дату для задачи с базовыми правилами
 func NextDate(now time.Time, date string, repeat string) (string, error) {
-	// Парсим дату из строки
-	parsedDate, err := time.Parse(DateFormat, date)
+	if repeat == "" {
+		return "", errors.New("не указано правило повторения")
+	}
+
+	// Проверка формата даты
+	taskDate, err := time.Parse(DateFormat, date)
 	if err != nil {
-		return "", errors.New("Неверный формат даты")
+		return "", fmt.Errorf("неправильный формат даты: %v", err)
 	}
 
-	// Проверяем и вычисляем следующую дату на основе повторений
-	var nextDate time.Time
-	switch repeat {
-	case "daily":
-		nextDate = parsedDate.AddDate(0, 0, 1)
-	case "weekly":
-		nextDate = parsedDate.AddDate(0, 0, 7)
-	case "monthly":
-		nextDate = parsedDate.AddDate(0, 1, 0)
-	default:
-		return "", fmt.Errorf("Неизвестный тип повторения: %s", repeat)
+	// Если правило повторения "d 1" и дата задачи не позже текущей, возвращаем текущую дату
+	if repeat == "d 1" && !taskDate.After(now) {
+		return now.Format(DateFormat), nil
 	}
 
-	// Возвращаем следующую дату в нужном формате
-	return nextDate.Format(DateFormat), nil
-}
+	// Бесконечный цикл для вычисления следующей даты
+	for {
+		if repeat == "y" {
+			// Добавляем 1 год к дате
+			taskDate = taskDate.AddDate(1, 0, 0)
+		} else if strings.HasPrefix(repeat, "d ") {
+			// Извлекаем количество дней из правила повторения
+			daysStr := strings.TrimPrefix(repeat, "d ")
+			days, err := strconv.Atoi(daysStr)
+			if err != nil || days < 1 || days > 400 {
+				return "", fmt.Errorf("неправильное значение в правиле: d %s", daysStr)
+			}
+			// Добавляем указанное количество дней к дате
+			taskDate = taskDate.AddDate(0, 0, days)
+		} else {
+			return "", fmt.Errorf("неправильный формат правила: %s", repeat)
+		}
 
-// Task представляет структуру задачи
-type Task struct {
-	ID      string `json:"id,omitempty"`
-	Date    string `json:"date"`
-	Title   string `json:"title"`
-	Comment string `json:"comment"`
-	Repeat  string `json:"repeat"`
+		// Проверяем, не превышает ли новая дата текущую
+		if taskDate.After(now) {
+			return taskDate.Format(DateFormat), nil
+		}
+	}
 }

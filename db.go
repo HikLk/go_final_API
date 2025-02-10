@@ -2,21 +2,12 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
+	"log"
 	"os"
 	"path/filepath"
-
-	_ "modernc.org/sqlite"
 )
 
-// Константы и глобальные переменные
-const DateFormat = "20060102"
-const limit = 50
-
-var db *sql.DB
-
-// initializDB инициализирует подключение к базе данных и создает таблицу, если она не существует
-func initializDB() (*sql.DB, error) {
+func initializeDB() (*sql.DB, error) {
 	// Определяем путь к файлу базы данных
 	appPath, err := os.Executable()
 	if err != nil {
@@ -26,29 +17,31 @@ func initializDB() (*sql.DB, error) {
 
 	// Проверяем, существует ли файл базы данных
 	_, err = os.Stat(dbFile)
-	install := os.IsNotExist(err)
+	isNewDatabase := os.IsNotExist(err)
 
 	// Открываем базу данных
-	db, err := sql.Open("sqlite", dbFile)
+	db, err := sql.Open("sqlite3", dbFile)
 	if err != nil {
 		return nil, err
 	}
 
-	// Если база данных новая, создаем таблицу
-	if install {
+	// Создаем таблицу и индекс, если база данных новая
+	if isNewDatabase {
 		createTableQuery := `
-        CREATE TABLE IF NOT EXISTS scheduler (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT NOT NULL,
-            title TEXT NOT NULL,
-            comment TEXT,
-            repeat TEXT,
-            status TEXT
-        )`
-		_, err := db.Exec(createTableQuery)
+		CREATE TABLE IF NOT EXISTS scheduler (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			date TEXT NOT NULL,
+			title TEXT NOT NULL,
+			comment TEXT,
+			repeat TEXT CHECK(LENGTH(repeat) <= 128)
+		);
+		CREATE INDEX IF NOT EXISTS idx_date ON scheduler(date);
+		`
+		_, err = db.Exec(createTableQuery)
 		if err != nil {
-			return nil, fmt.Errorf("Ошибка при создании таблицы: %v", err)
+			return nil, err
 		}
+		log.Println("Таблица scheduler успешно создана.")
 	}
 
 	return db, nil
